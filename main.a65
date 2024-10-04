@@ -1,0 +1,481 @@
+; @file main.a65
+; @brief PET Memory Test
+; @author Matt Beard
+; @date 24/09/2024
+; This program is designed to test the memory of a 40-column Commodore PET.
+; The algorithm used is March-UD, and the implimentaion is partly inspired by the Apple II Dead Test,
+; written by David Giller, which can be found at https://github.com/misterblack1/appleII_deadtest
+;
+; Outline of the code:
+; * Step one - Play a boot chime to show that the CPU and VIA are working
+; * Step two - Test the screen memory. This is a challenge as we cannot use zero page or the stack at this point.
+; * Step three - Test the memory at $0000, $2000 and $4000 to determine how much memory we have. 8k, 16k and 32k are valid values.
+; * Step four - Test the first 8k or 16k in one go (depending on the memory size detected in step two).
+; * Step five - If 32k is detected, test the second 16k.
+; * Repeat steps four and five ad infinitum.
+;
+; Special implementation notes:
+; * The screen memory test is done without using the stack or zero page, so is quite long-winded.
+; * If the screen memory test fails, a fail message will be displayed, along with three full character sets.
+;   This is intended to help diagnose the fault as well as flag the issue. Also, the CB2 speaker will beep if there is one.
+; * If the screen memory test passes, the screen will be cleared and a welcome message displayed, after which we set up
+;   a small stack area and some working memory in the bottom two lines of the screen memory.
+; * From this point onwards we can call subroutines, using the working space in the screen memory. There are two different
+;   methods for subrouitine calls, both of which store a return address in byte pair RetAddr in the screen memory, then jump
+;   to the subroutine. The simplest case is that this subroutine does something, then ends with jmp (RetAddr) to return.
+;   This cannot allow any further calls inside the subroutine, as this would destroy the return address. The other method is
+;   to make the call in the same way, but at the start of the subroutine the macro pushret is used to transfer the return
+;   address to a stack area in the screen memory, then the subroutine can call other subroutines, which can in turn call
+;   other subroutines, etc. The return from such a subroutine is done with the doreturn macro, which pops the return address 
+;   from the stack and jumps to it using jmp (RetAddr). Complex subroutines can call other comlex or simple subroutines, 
+;   but the simple subroutines cannot call other subroutines of any kind.
+; * The memory size detection is done by writing to $0000, $2000 and $4000, then reading them back. If the values are correct
+;   then we assume that we have 8k, 16k or 32k of memory. If the first test fails then we display a message and halt.
+
+.include "screendef.inc"
+.include "messages.inc"
+.include "macros.inc"
+
+.define VIADDRA  $e843          ; Port A Data Direction Register on the VIA
+.define VIAPORTA $e84f	        ; Port A Data Register on the VIA (not linked to CA2)
+.define VIAIFR   $e84d	        ; Interrupt Flag Register on the VIA
+.define VIAIER   $e84e	        ; Interrupt Enable Register on the VIA
+.define VIAACR   $e84b	        ; Auxiliary Control Register on the VIA
+.define VIAPCR   $e84c	        ; Paripheral Control Register on the VIA
+
+
+; Define the zero page
+.zeropage
+
+; Byte in zero page to use for bit testing etc - will NOT survive subroutine calls
+zBitTemp:
+        .res 1
+
+.DATA        
+DataTemp:
+        .res 2
+
+
+.CODE		
+TestTable:
+        .byt $80, $40, $20, $10, $08, $04, $02, $01, $aa, $55, 0
+
+Halt:   jmp Halt
+
+.include "screenio.inc"
+
+
+Boot:	sei			; Ensure interrupts are disabled
+        cld                     ; Clear decimal mode
+
+        ; Play a boot chime - start by configuring the VIA to drive the CB2 speaker pin
+        lda #$00
+	sta VIAIER   		; Clear Interrupt Enable Register on the VIA
+	sta VIAACR	        ; Clear Auxiliary Control Register on the VIA
+
+        lda #$fc                ; Sounder off, non-graphic character set
+        sta VIAPCR              ; Store in PCR
+
+        ; Low beep first
+LowTone:lda #$fc                ; Speaker off code, non-graphic character set
+        ldy #0                  ; Outer loop counter
+@loop:  ldx #0                  ; Inner loop counter
+@loop2: nop                     ; 2-cycles
+        nop                     ; 2-cycles
+        nop                     ; 2-cycles
+        inx                     ; Continue the inner loop
+        bne @loop2              ; ... until the inner loop counter wraps
+
+        tax                     ; stash the current speaker code in X
+        tya                     ; Get the outer loop counter
+        and #$01                ; We are sounding... but only when the outer loop count bit 0 is set (low tone)
+        bne @skip               ; If not, we don't change the speaker
+        txa                     ; Get the speaker code back
+        eor #$20                ; Invert the speaker bit
+        sta VIAPCR              ; Send to the VIA to sound the speaker
+        jmp @skip2              ; Skip the txa instruction as we now have the new speaker code in A
+
+@skip:  txa                     ; Not sounding this time - get the old speaker code back
+@skip2: iny                     ; Increment the outer loop counter
+        bne @loop               ; Loop until the outer loop counter wraps
+
+HighTone:
+        ldy #0                  ; Outer loop counter
+@loop:  ldx #0                  ; Inner loop counter
+@loop2: nop                     ; 2-cycles
+        nop                     ; 2-cycles
+        nop                     ; 2-cycles
+        inx                     ; Continue the inner loop
+        bne @loop2              ; ... until the inner loop counter wraps
+        eor #$20                ; Invert the speaker bit (high tone)
+        sta VIAPCR              ; Send to the VIA to sound the speaker
+        iny                     ; Increment the outer loop counter
+        bne @loop               ; Loop until the outer loop counter wraps
+
+        ; Speaker off after the beep
+        lda #$fc                ; Speaker off code, non-graphic character set
+        sta VIAPCR              ; Store in PCR
+
+MemoryTest:
+
+; Test the screen memory
+.include "screentest.inc"
+
+; Screen RAM OK
+ScreenMemoryOK:
+        ldx #00                 ; Clear the bottom section of the screen
+        lda #32                 ; because from now on we will be using it for working memory
+@loop:  sta ScreenMem + 768, X
+        inx
+        bne @loop
+
+        lda #00
+        sta StackPtr            ; Clear the in-screen stack pointer
+        initldaAddr16Y          ; Initialise the ldaAddr16Y subroutine
+        initstaCursorPos        ; Initialise the staCursorPos subroutine
+        initstaTestAddrY        ; Initialise the staTestAddrY subroutine
+
+        ; Clear the screen
+        docall ClearScreenSub
+
+        ; Print the welcome message
+        printMessageNL WelcomeMessage
+
+        ; Blank line
+        docall printNL
+
+        ; Print the screen memory test OK message
+        printMessageNL ScreenNoError
+
+        ; Blank line
+        docall printNL
+
+
+        ; Try and detect how much memory we have
+      
+        ; Start just by seeing if we have anything testable!
+        ldy #0                  ; Count of working values!
+        ldx #0
+Loop0k: stx $0000               ; Write test data to byte 0 in memory
+        lda $0000               ; Read it back (now we have write in X, read in A so we can print error if needed)
+        sta NLFlag              ; Store the value in the NLFlag just to do the compare (rather that re-reading as it could change!)
+        cpx NLFlag              ; Compare the value we wrote with the value we read
+        bne Fail0k              ; If this fails then we probably don't have working memory at $0
+        cpy #$ff                ; Don't allow the count to wrap back to zero so all working bytes will register as 255, not 0
+        beq Fail0k
+        iny                     ; Increment the count of working values
+
+Fail0k:                         ; We skip here if the byte 0 test fails this time
+        inx                     ; Increment the test value
+        bne Loop0k              ; Loop until we have tested all 256 values
+
+        ; How many of the test values worked in byte 0?
+        cpy #$20                ; If 32 values or more worked we assume the lower memory at least exists
+        bge ZeroWorks           ; Show that we found something
+
+        printMessage FailedAt
+        ldy #$00
+        docall PrintAddr00NL    ; Show $0000 (with a newline)
+        
+        lda #$00                ; Unknown memory size!
+        sta MemSize
+        jmp StartTestLoop
+
+ZeroWorks:
+        printMessage FoundMem
+        ldy #$00
+        docall PrintAddr00      ; Show $0000
+ZeroTested:
+
+        ; We have at least 1 byte of memory... let's see how much we have
+        ; Valid values are 8k, 16k and 32k
+
+        lda #$20
+        sta MemSize             ; Assume 8k for now
+
+        ; We have at least 8k of memory... let's see if we have 16k
+        ; Check if there is usable memory above 8k
+        ldy #0                  ; Count of working values!
+        ldx #0
+Loop8k: stx $2000               ; Write test data to byte 8k in memory
+        lda $2000               ; Read it back (now we have write in X, read in A so we can print error if needed)
+        sta NLFlag              ; Store the value in the NLFlag just to do the compare (rather that re-reading as it could change!)
+        cpx NLFlag              ; Compare the value we wrote with the value we read
+        bne Fail8k              ; If this fails then we probably don't have working memory at $2000
+        cpy #$ff                ; Don't allow the count to wrap back to zero so all working bytes will register as 255, not 0
+        beq Fail8k
+        iny                     ; Increment the count of working values
+
+Fail8k: inx
+        bne Loop8k
+
+        ; How many of the test values worked in byte $2000?
+        cpy #$20                ; If 32 values or more worked we assume that either there is memory at 8k or it is an echo of byte 0
+        bge Byte8kExists        ; Go check if it is an echo
+
+        printMessage FailedAt
+        ldy #$20
+        docall PrintAddr00NL    ; Show $2000 (with a newline)
+
+        jmp TestDetectedMemory
+
+Byte8kExists:
+        lda #$a5                ; Store a test value at $2000
+        sta $2000
+        lda $2000               ; Read back what we got (even if it is different)
+
+        ldx #$00                ; Clear byte 0
+        stx $0000
+        
+        cmp $2000               ; Did doing that change $2000?
+        bne @echo               ; If it did then the memory at $2000 is probably just an echo of $0000
+
+        ldx #$ff                ; Set all bits in byte 0
+        stx $0000
+
+        cmp $2000               ; Did doing that change $2000?
+        beq Got16k              ; If it did not then we have at least 16k of memory
+
+@echo:  lda #$20
+        docall PrintAddr00      ; Show "$2000 ECHOS $0000"
+        printMessageNL EchosZero
+
+        jmp TestDetectedMemory
+
+Got16k: printMessage CommaMessage
+        ldy #$20
+        docall PrintAddr00      ; Show $2000
+
+        ; Assume 16k for now
+        lda #$40
+        sta MemSize
+
+        ; We have at least 16k of memory... let's see if we have 32k
+        ; Check if there is usable memory above 16k
+        ldy #0                  ; Count of working values!
+        ldx #0
+Loop16k:stx $4000               ; Write test data to byte 16k in memory
+        lda $4000               ; Read it back (now we have write in X, read in A so we can print error if needed)
+        sta NLFlag              ; Store the value in the NLFlag just to do the compare (rather that re-reading as it could change!)
+        cpx NLFlag              ; Compare the value we wrote with the value we read
+        bne Fail16k             ; If this fails then we probably don't have working memory at $4000
+        cpy #$ff                ; Don't allow the count to wrap back to zero so all working bytes will register as 255, not 0
+        beq Fail16k
+        iny                     ; Increment the count of working values
+
+Fail16k:inx
+        bne Loop16k
+
+        ; How many of the test values worked in byte $4000?
+        cpy #$20                ; If 32 values or more worked we assume that either there is memory at 16k or it is an echo of byte 0
+        bge Byte16kExists       ; Go check if it is an echo
+
+        printMessage FailedAt
+        ldy #$40
+        docall PrintAddr00NL    ; Show $4000 (with a newline)
+
+        jmp TestDetectedMemory
+
+Byte16kExists:
+        lda #$a5                ; Store a test value at $4000
+        sta $4000
+        lda $4000               ; Read back what we got (even if it is different)
+
+        ldx #$00                ; Clear byte 0
+        stx $0000
+        
+        cmp $4000               ; Did doing that change $4000?
+        bne @echo               ; If it did then the memory at $4000 is probably just an echo of $0000
+
+        ldx #$ff                ; Set all bits in byte 0
+        stx $0000
+
+        cmp $4000               ; Did doing that change $4000?
+        beq Got32k              ; If it did not then we have 32k of memory
+
+@echo:  lda #$40
+        docall PrintAddr00      ; Show "$4000 ECHOS $0000"
+        printMessageNL EchosZero
+        
+        jmp TestDetectedMemory
+
+Got32k: printMessage CommaMessage
+        ldy #$40
+        docall PrintAddr00      ; Show $4000
+
+        ; Set 32k detected
+        lda #$80
+        sta MemSize
+
+        jmp TestDetectedMemory
+
+TestDetectedMemory:
+        ; Blank line
+        docall printNL
+
+        ; Now we know how much memory we have, report the amount
+        printMessage MemorySizeMessage
+        
+        lda MemSize
+        cmp #$80
+        bne @skip
+        lda #$32
+        jmp @skip2
+@skip:  cmp #$40
+        bne @skip2
+        lda #$16
+        jmp @skip2
+        lda #$08
+
+@skip2: ; Blank line
+        sta BCDErrorCount
+        lda #<BCDErrorCount
+        sta Addr16
+        lda #>BCDErrorCount
+        sta Addr16 + 1
+        ldy #1
+        docall PrintBCDSub
+
+        printMessageNL KMessage
+        
+StartTestLoop:
+        ; Zero the BCD counters
+        lda #$00
+        ldy #LoopCountBytes + ErrorCountBytes + PhaseErrorsBytes - 1
+@loop:  sta BCDLoopCount, Y
+        dey
+        bpl @loop
+
+        sta PhaseBitErrors      ; Clear the phase bit errors
+
+TestLoop:
+        ; Blank line
+        docall printNL
+
+        sed                    ; Set decimal mode
+        inc BCDLoopCount +1    ; Increment the BCD loop counter
+        bne @skip              ; If it didn't wrap then we are done with incrementing the loop counter
+        inc BCDLoopCount       ; Increment the high byte of the BCD loop counter
+@skip:  cld                    ; Clear decimal mode
+
+        ; Print the current pass number (loop count)
+        printMessage LoopCountMessage
+
+        ldy #LoopCountBytes
+        lda #<BCDLoopCount
+        sta Addr16
+        lda #>BCDLoopCount
+        sta Addr16 + 1
+        docall PrintBCDSub
+
+        ; Print the total error count
+        printMessage ErrorCountMessage
+
+        ldy #ErrorCountBytes
+        lda #<BCDErrorCount
+        sta Addr16
+        lda #>BCDErrorCount
+        sta Addr16 + 1
+        docall PrintBCDSub
+
+        docall printNL
+
+        ; Valid memory configurations are:
+        ; 8k - as two banks of 4k
+        ; 8k - as a single bank of 8k
+        ; 16k - as two banks of 8k
+        ; 16k - as a single bank of 16k
+        ; 32k - as two banks of 16k
+        ;
+        ; So, If we have 8k, we test the first 4k, the second 4k, and the first 8k (covers both valid 8k options)
+        ; If we have 16k, we test the first 8k and the second 8k, and the first 16k (covers both valid 16k options)
+        ; If we have 32k, we test the first 16k, the second 16k (no other options)
+
+        ; Skip the 8k tests if we know we have 32k
+        lda MemSize
+        cmp #$80
+        beq TestLo16k
+
+        ; Skip the 4k tests if we know we have 16k
+        lda MemSize
+        cmp #$40
+        beq TestLo8k
+
+TestLo4k:
+        ; Test the first 4k of memory
+        lda #$00
+        sta TestStartPage
+        lda #$10
+        sta TestEndPage
+
+        docall MainMemoryTest
+
+TestHi4k:
+        ; Test the second 4k of memory
+        lda #$10
+        sta TestStartPage
+        lda #$20
+        sta TestEndPage
+
+        docall MainMemoryTest
+
+TestLo8k:
+        ; Test the first 8k of memory
+        lda #$00
+        sta TestStartPage
+        lda #$20
+        sta TestEndPage
+
+        docall MainMemoryTest
+
+        ; Skip the 16k and 32k tests if we only have 8k
+        lda MemSize
+        cmp #$20
+        beq TestsDone
+
+TestHi8k:
+        ; Test the second 8k of memory
+        lda #$20
+        sta TestStartPage
+        lda #$40
+        sta TestEndPage
+
+        docall MainMemoryTest
+
+TestLo16k:
+        ; Test the first 16k of memory
+        lda #$00
+        sta TestStartPage
+        lda #$40
+        sta TestEndPage
+
+        docall MainMemoryTest
+
+        ; Skip the 32k test if we only have 16k
+        lda MemSize
+        cmp #$40
+        beq TestsDone
+
+TestHi16k:
+        ; Test the second 16k of memory
+        lda #$40
+        sta TestStartPage
+        lda #$80
+        sta TestEndPage
+
+TestsDone:
+        docall MainMemoryTest
+
+        ; Next pass
+        jmp TestLoop
+
+.include "memorytest.inc"
+
+
+.SEGMENT "BOOTVEC"
+		; Make all three vectors point to boot!
+		.byt <Boot, >Boot
+		.byt <Boot, >Boot
+		.byt <Boot, >Boot
+
+
