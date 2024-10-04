@@ -10,14 +10,14 @@ This program is designed to test the memory of a 40-column Commodore PET.
 The algorithm used is March-UD, and the implimentaion is partly inspired by the Apple II Dead Test,
 written by David Giller, which can be found at https://github.com/misterblack1/appleII_deadtest
 
-## Outline of the Code:
+## Outline of the Code
 * Step one - Play a boot chime to show that the CPU and VIA are working
 * Step two - Test the screen memory. This is a challenge as we cannot use zero page or the stack at this point.
 * Step three - Test the memory at $0000, $2000 and $4000 to determine how much memory we have. 8k, 16k and 32k are valid values.
 * Step four - Test 4k, 8k or 16k sections (depending on the memory size detected in step two).
 * Repeat step four ad infinitum.
 
-## Special Implementation Notes:
+## Special Implementation Notes
 * The screen memory test is done without using the stack or zero page, so is quite long-winded.
 * If the screen memory test fails, a fail message will be displayed, along with three full character sets.
   This is intended to help diagnose the fault as well as flag the issue. Also, the CB2 speaker will beep if there is one.
@@ -35,8 +35,13 @@ written by David Giller, which can be found at https://github.com/misterblack1/a
 * The memory size detection is done by writing to $0000, $2000 and $4000, then reading them back. If the values are correct
   then we assume that we have 8k, 16k or 32k of memory. If the first test fails then we display a message and halt.
 
- # RESTRICTIONS
- Please feel free to download and try out this code, however:
+# Building the Code
+* This software is written for the ca65 Macro Assember https://cc65.github.io/
+* A batch file build.bat is included to simplify building on Windows computers
+* The output is a 4k EPROM file that is intended to be used to temporarily replace the 'F' ROM.
+
+# RESTRICTIONS
+Please feel free to download and try out this code, however:
 
  1. It is expected at this stage that anyone trying out the code report their experience using it
  1. Feel free to download the source code, and/or any binary files, and to modify, build and use this code
