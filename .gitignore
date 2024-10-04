@@ -1,0 +1,8 @@
+# Ignore object files
+*.o65
+
+# Ignore binay output files
+*.bin
+
+# Ignore RAM image files
+*.dat
