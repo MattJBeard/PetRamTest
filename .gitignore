@@ -1,5 +1,8 @@
 # Ignore object files
 *.o65
+# Ignore list files and map files
+*.lst
+*.map
 
 # Ignore binay output files
 *.bin
