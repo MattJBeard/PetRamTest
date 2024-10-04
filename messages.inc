@@ -6,7 +6,7 @@
 .RODATA
 
 WelcomeMessage:
-	.byt "PET RAM TEST BY MATT BEARD 0.1 4/10/2024", 0
+	.byt "PET RAM TEST BY MATT BEARD 0.1A 4/10/24", 0
 
 ScreenRAMError:
         .byt "SCREEN RAM ERROR", 0

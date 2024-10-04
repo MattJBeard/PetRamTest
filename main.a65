@@ -213,6 +213,7 @@ Fail8k: inx
         cpy #$20                ; If 32 values or more worked we assume that either there is memory at 8k or it is an echo of byte 0
         bge Byte8kExists        ; Go check if it is an echo
 
+        printMessage CommaMessage
         printMessage FailedAt
         ldy #$20
         docall PrintAddr00NL    ; Show $2000 (with a newline)
@@ -270,6 +271,7 @@ Fail16k:inx
         cpy #$20                ; If 32 values or more worked we assume that either there is memory at 16k or it is an echo of byte 0
         bge Byte16kExists       ; Go check if it is an echo
 
+        printMessage CommaMessage
         printMessage FailedAt
         ldy #$40
         docall PrintAddr00NL    ; Show $4000 (with a newline)
@@ -320,14 +322,14 @@ TestDetectedMemory:
         cmp #$80
         bne @skip
         lda #$32
-        jmp @skip2
+        jmp ShowMem
 @skip:  cmp #$40
         bne @skip2
         lda #$16
-        jmp @skip2
-        lda #$08
+        jmp ShowMem
+@skip2: lda #$08
 
-@skip2: ; Blank line
+ShowMem:; Temporarily re-use the first byte of the Error Counter for the memory size
         sta BCDErrorCount
         lda #<BCDErrorCount
         sta Addr16
@@ -463,9 +465,9 @@ TestHi16k:
         lda #$80
         sta TestEndPage
 
-TestsDone:
         docall MainMemoryTest
 
+TestsDone:
         ; Next pass
         jmp TestLoop
 
