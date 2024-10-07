@@ -8,7 +8,9 @@
 ## ABOUT
 This program is designed to test the memory of a 40-column Commodore PET.
 The algorithm used is March-UD, and the implimentaion is partly inspired by the Apple II Dead Test,
-written by David Giller, which can be found at https://github.com/misterblack1/appleII_deadtest
+written by David Giller, which can be found at https://github.com/misterblack1/appleII_deadtest 
+and by "March U: a test for unlinked memory faults" by A.J. van de Goor and G.N. Gaydadjiev, which
+can be found at https://www.researchgate.net/publication/3349024_March_U_A_test_for_unlinked_memory_faults
 
 ## Outline of the Code
 * Step one - Play a boot chime to show that the CPU and VIA are working
